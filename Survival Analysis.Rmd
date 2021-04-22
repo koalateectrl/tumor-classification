@@ -1,0 +1,120 @@
+---
+title: "CoxRegression"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(data.table)
+library(survival)
+library(glmnet)
+library(survcomp)
+library(readxl)
+```
+
+```{r}
+data <-read_excel("/Users/samwwong/Desktop/Michael Zhang/mb_t1_t2_3way.xlsx")
+```
+```{r}
+data <- data[!is.na(data[, 7]), ]
+names(data) <- gsub(x = names(data), pattern = "\\-", replacement = "_")
+data$alive[is.na(data$alive)] <- 'Alive'
+data$alive[data$alive %in% c('Alive', 'alive')] <- 0
+data$alive[data$alive %in% c('Deceased', 'deceased')] <- 1
+```
+
+
+```{r}
+data_group34 <- data[data$molecular == 'group3', ]
+data_group34 <- data_group34[data_group34$os > 0, ]
+```
+
+```{r}
+data_shh <- data[data$molecular == 'shh', ]
+data_shh <- data_shh[data_shh$age <= 60, ]
+data_shh <- data_shh[data_shh$os > 0, ]
+```
+
+
+```{r}
+fold_size <- floor(nrow(data_group34) / 4)
+fold1 <- data_group34[1:fold_size, ]
+fold2 <- data_group34[(fold_size + 1):(fold_size*2), ]
+fold3 <- data_group34[(fold_size*2 + 1):(fold_size*3), ]
+fold4 <- data_group34[(fold_size*3 + 1):nrow(data_group34), ]
+```
+
+
+```{r}
+fold_size <- floor(nrow(data_shh) / 4)
+fold1 <- data_shh[1:fold_size, ]
+fold2 <- data_shh[(fold_size + 1):(fold_size*2), ]
+fold3 <- data_shh[(fold_size*2 + 1):(fold_size*3), ]
+fold4 <- data_shh[(fold_size*3 + 1):nrow(data_shh), ]
+```
+
+
+```{r}
+all_folds = list(fold1, fold2, fold3, fold4)
+y_cols <- c("os", "alive")
+x_cols <- colnames(fold1)[10:ncol(fold1)]
+master_frame <- data.frame(ConcordanceSurv=rep(0, 4), Concordance=rep(0, 4), Features=NA, Fold=NA)
+```
+
+
+
+```{r}
+for (i in 1:4) {
+    #Generating Train and Test variables
+    test <- as.data.frame(rbindlist(all_folds[i]))
+    train <- as.data.frame(rbindlist(all_folds[-i]))
+    x_train <- train[x_cols]
+    y_train <- train[y_cols]
+    x_test <- test[x_cols]
+    y_test <- test[y_cols]
+    train_surv = Surv(as.numeric(y_train["os"][[1]]), as.numeric(y_train["alive"][[1]]))
+    test_surv = Surv(as.numeric(y_test["os"][[1]]), as.numeric(y_test["alive"][[1]]))
+    #Running Cross validation LASSO
+    n_iter <- 20
+    lambdas <- rep(0, n_iter)
+    for (j in 1:n_iter) {
+      cvfit <- cv.glmnet(data.matrix(x_train), train_surv, family = 'cox', type.measure = "C", nfolds=5)
+      lambdas[j] <- cvfit$lambda.min
+    }
+    
+    #Getting Best Lambda
+    lambda = mean(lambdas)
+    fit <- glmnet(data.matrix(x_train), train_surv, family = 'cox')
+    tmp_coeffs <- coef(fit, s = lambda)
+    coefs <- (tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1])
+    
+    #Keeping 5 largest coefficients
+    coefs2 <- (data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x))
+    coefs3 <- cbind(coefs2, NewColumn=abs(coefs2[2]))
+    coefs3 <- coefs3[order(coefs3[3],decreasing=T)[1:5],]
+    coefs <- (coefs3[1][[1]])
+    
+    #Evaluating model on test set
+    x_features <- gsub(",", " +", paste(coefs, collapse=', ' ))
+    os_str <- "os"
+    alive_str <- "alive"
+    y_str <- "Surv(as.numeric(y_train[os_str][[1]]), as.numeric(y_train[alive_str][[1]]))"
+    
+    form <- as.formula(paste(y_str, "~", x_features))
+    cox_model <- coxph(form, data = x_train, control = coxph.control(iter.max = 1000))
+    pred_validation <- predict(cox_model, newdata = x_test, type="risk")
+    
+    #Calculating concordance
+    cindex_validation <- concordance.index(pred_validation, surv.time=as.numeric(y_test[os_str][[1]]), surv.event=as.numeric(y_test[alive_str][[1]]), method = "noether")
+    master_frame[i,] <- data.frame(Concordance=cindex_validation$c.index, ConcordanceGLM=Cindex(pred_validation, test_surv), Features=x_features, Fold=i)
+    print(cindex_validation)
+  }
+
+```
+```{r}
+master_frame
+```
