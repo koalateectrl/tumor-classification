@@ -24,7 +24,7 @@ set.seed(500)
 
 ```{r}
 ## DATA set up for LASSO TRAIN
-lasso_data <- read_excel("~/Desktop/Michael Zhang/mb_t1_t2_3way.xlsx")
+lasso_data <- read_excel("~/Desktop/peds_tumor/mbpyradiomics/molec_classifier/binary/wnt_rest.xlsx")
 lasso_data[,"molec_id"]  <- NULL
 lasso_data[,"seg_id"]  <- NULL
 lasso_data[,"dx_date"]  <- NULL
@@ -35,7 +35,7 @@ lasso_data[,"pfs"]  <- NULL
 lasso_data$sex[lasso_data$sex == "M"] <- "0"
 lasso_data$sex[lasso_data$sex == "F"] <- "1"
 lasso_data$sex <- as.factor(lasso_data$sex)
-#View(lasso_data)
+View(lasso_data)
 
 #lasso_data<-lasso_data[!(lasso_data$molecular=="3 or 4"),]
 #lasso_data<-lasso_data[!(lasso_data$molecular=="shh or 3 or 4"),]
@@ -67,6 +67,7 @@ x_final.df <- data.frame(x)
 
 x_final <- model.matrix( ~., x_final.df)
 x_final <- x_final[,-1] #remove intercept
+#View(x_final)
 ```
 
 
@@ -74,9 +75,10 @@ x_final <- x_final[,-1] #remove intercept
 ```{r}
 #extract output data, stored in column 1
 y <- training[, 1]
-
+y <- as.factor(y$molecular)
 #formats output to data frame
 y_final <- data.matrix(y)
+#View(y_final)
 ```
 
 
@@ -103,7 +105,7 @@ for (i in 1:100) {
   
   cvfit = cv.glmnet(x_final, y_final, family = "multinomial", alpha = 1, nfolds = 10)
   Coefficients <- coef(cvfit, s = cvfit$lambda.min) #yields Coefficients for given cycle
-  coeffs <- Coefficients[["1"]]
+  coeffs <- Coefficients[[1]]
   
   Active.Indices <- which(coeffs !=0)
   Active.Coeffs <- coeffs[Active.Indices]
@@ -113,6 +115,14 @@ for (i in 1:100) {
   cvfit$cvm <- append(cvfit$cvm,i)
   AllErrors <- qpcR:::cbind.na(AllErrors, cvfit$cvm)
 }
+
+```
+```{r}
+Coefficients <- coef(cvfit, s = cvfit$lambda.min) #yields Coefficients for given cycle
+
+Coefficients[[1]]
+
+AllCoeffs
 
 ```
 
