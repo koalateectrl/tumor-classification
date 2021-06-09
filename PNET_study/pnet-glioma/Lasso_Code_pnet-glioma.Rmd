@@ -1,0 +1,126 @@
+---
+title: "LASSO code"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+remove(list = ls())
+library(glmnet)
+library(caret)
+library(MLeval)
+library(qpcR)
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(pROC)
+library(gbm)
+set.seed(500)
+```
+
+```{r}
+## DATA set up for LASSO TRAIN
+lasso_data <- read_excel("~/Desktop/pnet_features/pnet-glioma_sp_t1t2.xlsx")
+
+count(lasso_data, institution)
+count(lasso_data, subgroup)
+
+lasso_data[,"seg_id"]  <- NULL
+lasso_data[,"id"]  <- NULL
+lasso_data[,"institution"]  <- NULL
+lasso_data[,"subgroup"]  <- NULL
+
+
+#lasso_data$path[lasso_data$path == "hgg"] <- "0"
+#lasso_data$path[lasso_data$path == "pnet"] <- "1"
+#lasso_data$path <- as.factor(lasso_data$path)
+
+#lasso_data$location[lasso_data$location == "sp"] <- "0"
+#lasso_data$location[lasso_data$location == "pf"] <- "1"
+#lasso_data$location <- as.factor(lasso_data$location)
+View(lasso_data)
+
+#head(lasso_data)
+count(lasso_data, path)
+ncol(lasso_data)
+
+##inTraining <- createDataPartition(lasso_data$molecular, p = 0.70, list = FALSE)
+##training <- lasso_data[inTraining,]
+##testing <- lasso_data[-inTraining,]
+
+count(lasso_data, path)
+##count(training, molecular)
+##count(testing, molecular)
+```
+
+```{r}
+
+#need to customize column range to match number of features
+dimcol <- ncol(lasso_data) #check 
+x <- (lasso_data[, 2:dimcol])
+
+
+#formats features to dataframe
+x_final.df <- data.frame(x)
+
+x_final <- model.matrix( ~., x_final.df)
+x_final <- x_final[,-1] #remove intercept
+#View(x_final)
+```
+
+
+
+```{r}
+#extract output data, stored in column 1
+y <- lasso_data[, 1]
+y <- as.factor(y$path)
+#formats output to data frame
+y_final <- data.matrix(y)
+#View(y_final)
+```
+
+
+```{r}
+#LASSO
+print('Full Dataset -  LASSO Multi Classification')
+cvfit = cv.glmnet(x_final, y_final, family = "binomial", nfolds = 10, alpha = 1, keep = TRUE)
+cvfit
+plot(cvfit)
+```
+
+
+```{r}
+#Set up matrix to collect predicted coefficients
+#rows matching the number of columns in x_final i.e. the number of features
+#need to add 1 because there is an intercept generated with "Coefficients" in the loop
+AllCoeffs = sparseMatrix(ncol(x_final)+1,1)
+
+AllErrors <-matrix() # rows = length of lambda stored in "cvm"; default i 100. col = # of seeds
+
+for (i in 1:100) {
+  print(i)
+  set.seed(i)
+  
+  cvfit = cv.glmnet(x_final, y_final, family = "binomial", alpha = 1, nfolds = 10)
+  Coefficients <- coef(cvfit, s = cvfit$lambda.min) #yields Coefficients for given cycle
+  #View(Coefficients)
+  #coeffs <- Coefficients[[1]] ##needed for multinomial
+  
+  AllCoeffs <- cbind(AllCoeffs, Coefficients) ##"coeffs" needed for multinomial//"Coefficients" needed for binary
+  
+  cvfit$cvm <- append(cvfit$cvm,i)
+  AllErrors <- qpcR:::cbind.na(AllErrors, cvfit$cvm)
+}
+
+```
+
+
+```{r}
+write.csv(as.data.frame(as.matrix(AllCoeffs)), file = "~/Desktop/pnet-glioma_LASSO.csv") ## may not write if path is incorrect
+#write.csv(as.data.frame(as.matrix(AllErrors)), file = "~/Desktop/LASSO_multi_errors.csv")
+
+```
