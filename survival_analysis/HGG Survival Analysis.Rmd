@@ -1,0 +1,113 @@
+---
+title: "HGG Survival Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(data.table)
+library(survival)
+library(glmnet)
+library(survcomp)
+library(readxl)
+```
+
+
+
+```{r}
+source_1 <- read_excel("/Users/samwwong/Desktop/Michael Zhang/hgg_gbm_t1t2.xlsx")
+source_2 <- read_excel("/Users/samwwong/Desktop/Michael Zhang/hgg_aa_t1t2.xlsx")
+source_3 <- read_excel("/Users/samwwong/Desktop/Michael Zhang/dipg_t1t2.xlsx")
+source_4 <- read_excel("/Users/samwwong/Desktop/Michael Zhang/gbm_t1t2.xlsx")
+
+new_data <- rbind(source_1, source_2, source_3, source_4)
+new_data <- na.omit(new_data)
+new_data <- new_data[new_data$os != 'NA', ]
+names(new_data) <- gsub(x = names(new_data), pattern = "\\-", replacement = "_")
+new_data$status[new_data$status %in% c('Alive', 'alive', 'unknown')] <- 0
+new_data$status[new_data$status %in% c('Deceased', 'deceased')] <- 1
+```
+
+
+```{r}
+data_sub <- new_data[new_data$loc == 'hemispheric', ]
+data_sub <- data_sub[data_sub$os > 0, ]
+```
+
+
+```{r}
+fold_size <- floor(nrow(data_sub) / 4)
+fold1 <- data_sub[1:fold_size, ]
+fold2 <- data_sub[(fold_size + 1):(fold_size*2), ]
+fold3 <- data_sub[(fold_size*2 + 1):(fold_size*3), ]
+fold4 <- data_sub[(fold_size*3 + 1):nrow(data_sub), ]
+```
+
+
+```{r}
+all_folds = list(fold1, fold2, fold3, fold4)
+y_cols <- c("os", "status")
+x_cols <- colnames(fold1)[10:ncol(fold1)]
+master_frame <- data.frame(ConcordanceSurv=rep(0, 4), Concordance=rep(0, 4), Features=NA, Fold=NA)
+```
+
+
+
+```{r}
+for (i in 1:4) {
+    #Generating Train and Test variables
+    test <- as.data.frame(rbindlist(all_folds[i]))
+    train <- as.data.frame(rbindlist(all_folds[-i]))
+    x_train <- train[x_cols]
+    y_train <- train[y_cols]
+    x_test <- test[x_cols]
+    y_test <- test[y_cols]
+    train_surv = Surv(as.numeric(y_train["os"][[1]]), as.numeric(y_train["status"][[1]]))
+    test_surv = Surv(as.numeric(y_test["os"][[1]]), as.numeric(y_test["status"][[1]]))
+    #Running Cross validation LASSO
+    n_iter <- 20
+    lambdas <- rep(0, n_iter)
+    for (j in 1:n_iter) {
+      cvfit <- cv.glmnet(data.matrix(x_train), train_surv, family = 'cox', type.measure = "C", nfolds=5)
+      lambdas[j] <- cvfit$lambda.min
+    }
+    
+    #Getting Best Lambda
+    lambda = mean(lambdas)
+    fit <- glmnet(data.matrix(x_train), train_surv, family = 'cox')
+    tmp_coeffs <- coef(fit, s = lambda)
+    coefs <- (tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1])
+    
+    #Keeping 5 largest coefficients
+    coefs2 <- (data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x))
+    coefs3 <- cbind(coefs2, NewColumn=abs(coefs2[2]))
+    coefs3 <- coefs3[order(coefs3[3],decreasing=T)[1:5],]
+    coefs <- (coefs3[1][[1]])
+    coefs <- coefs[!is.na(coefs)]
+    
+    #Evaluating model on test set
+    x_features <- gsub(",", " +", paste(coefs, collapse=', ' ))
+    os_str <- "os"
+    status_str <- "status"
+    y_str <- "Surv(as.numeric(y_train[os_str][[1]]), as.numeric(y_train[status_str][[1]]))"
+    
+    form <- as.formula(paste(y_str, "~", x_features))
+    cox_model <- coxph(form, data = x_train, control = coxph.control(iter.max = 1000))
+    pred_validation <- predict(cox_model, newdata = x_test, type="risk")
+    
+    #Calculating concordance
+    cindex_validation <- concordance.index(pred_validation, surv.time=as.numeric(y_test[os_str][[1]]), surv.event=as.numeric(y_test[status_str][[1]]), method = "noether")
+    master_frame[i,] <- data.frame(Concordance=cindex_validation$c.index, ConcordanceGLM=Cindex(pred_validation, test_surv), Features=x_features, Fold=i)
+    print(cindex_validation)
+  }
+
+```
+
+
+```{r}
+master_frame
+```
